@@ -146,11 +146,17 @@ class Qronos(GPTQ):
             inp = inp.unsqueeze(0)
             native_inp = native_inp.unsqueeze(0)
 
-        batch_size = inp.shape[0]
-
         if len(inp.shape) == 3:
             inp = inp.reshape((-1, inp.shape[-1]))
             native_inp = native_inp.reshape((-1, native_inp.shape[-1]))
+        # house (S4 launch fix): count TOKEN rows, the same unit as stock
+        # GPTQ's `batch_token_size` — expected_nsamples is
+        # total_calibration_tokens, so counting forwards (old
+        # `inp.shape[0]` on the 3D tensor = 1) made the rank-starvation
+        # fallback fire on EVERY module of every real run (256 << 524288).
+        # H/G renorm and sqrt(2/n) scaling are ratio-consistent in either
+        # unit; the gate, avg_loss and samples telemetry are not.
+        batch_size = inp.shape[0]
         # After reshape both are [tokens, columns]; transpose to
         # [columns, tokens] for covariance accumulation.
         inp = inp.t()

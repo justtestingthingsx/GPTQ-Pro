@@ -238,10 +238,13 @@ def test_stats_orientation():
     xq = [torch.randn(8, ic)]
     feed(solver, named, xf, xq)
 
-    # nsamples counts BATCHES (the unsqueezed leading dim), matching FOEM's
-    # convention — one 2D batch => nsamples == 1 => scale == 2.0. The shared
-    # H/G scale cancels in the update math (NOTES.md R6).
-    scale = 2.0
+    # nsamples counts TOKEN ROWS (post-reshape), the same unit as stock
+    # GPTQ's batch_token_size — required so the rank-starvation fallback
+    # gate compares like units against expected_nsamples
+    # (total_calibration_tokens). One 2D batch of 8 rows => nsamples == 8
+    # => scale == 2/8. The shared H/G scale cancels in the update math
+    # (NOTES.md R6); this test's real assertion is the orientation.
+    scale = 2.0 / 8
     H_expect = scale * xq[0].t().matmul(xq[0])
     G_expect = scale * xf[0].t().matmul(xq[0])
     assert torch.allclose(solver.H, H_expect, atol=1e-5), "H must be x_hat x_hat^T"
