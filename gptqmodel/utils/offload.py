@@ -42,7 +42,7 @@ def get_module_fullname(model: torch.nn.Module, module: torch.nn.Module) -> str:
         if mod is module:
             return name  # dotted path like "model.embed_tokens" or "model.layers.0.self_attn.q_proj"
 
-    name = module.full_name if module is NamedModule else ""
+    name = module.full_name if isinstance(module, NamedModule) else ""
     raise Exception(f"module not found in model: name = {name}, module = {module}")
 
 def set_submodule(root: torch.nn.Module, path: str, new_mod: torch.nn.Module) -> None:
@@ -186,8 +186,10 @@ def _offload_disk_locked(module: nn.Module, name: str, disk_path: str = "."):
     # print(f"device_map base_modules: {device_map}")
 
     # skip modules that have no parameters and no buffers since they can't be offloaded
-    has_params  = any(p.numel() > 0 for p in module.parameters(recurse=False))
-    has_buffers = any(b.numel() > 0 for b in module.buffers(recurse=False))
+    # recurse: container modules (decoder blocks) hold every real tensor in submodules,
+    # and the offload below walks the full subtree via state_dict()
+    has_params  = any(p.numel() > 0 for p in module.parameters(recurse=True))
+    has_buffers = any(b.numel() > 0 for b in module.buffers(recurse=True))
     if not has_params and not has_buffers:
         return
 

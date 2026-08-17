@@ -161,7 +161,7 @@ def torch_compile(module: Union[torch.nn.Module, Callable], backend:str ="induct
 
 def torch_new_stream():
     global STREAM
-    if STREAM is None:
+    if STREAM is not None:
         return STREAM
 
     if HAS_CUDA:
@@ -176,7 +176,7 @@ def torch_new_stream_ctx():
     if HAS_CUDA:
         return torch.cuda.stream(torch_new_stream())
     if HAS_XPU:
-        return torch.xpu.Stream(torch_new_stream())
+        return torch.xpu.stream(torch_new_stream())
     return contextlib.nullcontext()
 
 def torch_sync(device: torch.device = None):
