@@ -37,7 +37,7 @@ from ..models import BaseQModel
 from ..models._const import SUPPORTS_MODULE_TYPES
 from ..models.base import CAPTURE_ONLY_FLAG
 from ..nn_modules.hooked_linear import HookedLinear, replace_module_with_hooked_legacy
-from ..quantization.config import METHOD, VramStrategy
+from ..quantization.config import VramStrategy
 from ..utils.attn_mask import apply_keep_mask_bt
 from ..utils.ctx import ctx
 from ..utils.device_telemetry import emit_device_telemetry
@@ -76,12 +76,6 @@ class FinalizeProgressInfo(NamedTuple):
     module_label: Optional[str]
     process_name: str
     layer_idx: Optional[int]
-
-
-def _restrict_quant_devices_for_method(method: Any, quant_devices: List[torch.device]) -> List[torch.device]:
-    """Apply method-specific device constraints for quantization workers."""
-
-    return quant_devices
 
 
 def _resolve_strategy_device_pool(
@@ -196,19 +190,6 @@ class ModuleLooper():
                     "compute_device_filter returned empty device list. "
                     "Using all devices for quantization."
                 )
-
-        restricted_quant_devices = _restrict_quant_devices_for_method(
-            getattr(self.gptq_model.quantize_config, "method", None),
-            quant_devices,
-        )
-        if restricted_quant_devices != quant_devices:
-            log.warn(
-                "ModuleLooper: METHOD.PARO forcing single-device quantization on `%s`; "
-                "ignoring additional devices %s to avoid multi-GPU sync issues.",
-                restricted_quant_devices[0],
-                [str(device) for device in quant_devices if device != restricted_quant_devices[0]],
-            )
-            quant_devices = restricted_quant_devices
 
         self._quant_devices = quant_devices
         self._quant_device_rr = 0
@@ -1372,8 +1353,8 @@ class ModuleLooper():
             fallback = getattr(self.gptq_model.quantize_config, "fallback", None)
 
         if self.gptq_model.quantize_config.lm_head:
-            if self.gptq_model.model.config.tie_word_embeddings and hasattr(self.gptq_model.model.model, "_tied_weights_keys"):
-                tied_keys = self.gptq_model.model._tied_weights_keys
+            tied_keys = getattr(self.gptq_model.model, "_tied_weights_keys", None)
+            if self.gptq_model.model.config.tie_word_embeddings and tied_keys:
                 for item in tied_keys:
                     if self.gptq_model.lm_head in item:
                         raise NotImplementedError("quantization of `lm_head` layer with `tied_weights=True` model state is not supported. Please check model has `tied_weights=False`.")
