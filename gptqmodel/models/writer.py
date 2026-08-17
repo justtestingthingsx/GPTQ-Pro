@@ -623,26 +623,6 @@ def ModelWriter(cls):
         # Save `quantize_config.json`
         quantize_config.save_pretrained(save_dir)
 
-        def debug_saved_config(path):
-            # List all files in the directory
-            files = os.listdir(path)
-            print("Files in directory:")
-            for file in files:
-                print(file)
-
-            config_file_paths = ["generation_config.json", "config.json"]
-            for file_name in config_file_paths:
-                full_path = os.path.join(path, file_name)
-                if os.path.isfile(full_path):
-                    print(f"Content of saved `{file_name}`:")
-                    with open(full_path, 'r') as config_file:
-                        config_data = json.load(config_file)
-                        print(json.dumps(config_data, indent=4))
-                else:
-                    print(f"`{file_name}` does not exist in the directory.")
-
-        debug_saved_config(save_dir)
-
         # Save processor related config files. For example: preprocessor_config.json, chat_template.json
         if hasattr(self,"processor") and isinstance(self.processor, ProcessorMixin):
             self.processor.save_pretrained(save_dir)

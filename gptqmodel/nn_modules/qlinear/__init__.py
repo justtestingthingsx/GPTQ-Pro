@@ -732,6 +732,12 @@ class GPTQQuantLinear(PackedGroupedQuantLinear):
 
 
 class PackableQuantLinear(GPTQQuantLinear):
+    # Intermediate dtype for the bitwise unpack in dequantize_weight(). int32 is
+    # the natural result dtype of the shifts and holds every masked value for
+    # bits in (2, 3, 4, 8) — narrower signed types overflow at 8-bit (maxq=255).
+    # Subclasses may override with a narrower dtype that still fits their maxq.
+    dequant_dtype = t.int32
+
     def __init__(self, *args, enable_wf_unsqueeze: bool = False, **kwargs):
         self.enable_wf_unsqueeze = enable_wf_unsqueeze
         super().__init__(*args, **kwargs)
