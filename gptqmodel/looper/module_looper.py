@@ -16,6 +16,7 @@ thread pool.
 from __future__ import annotations
 
 import math
+import re
 import threading
 import time
 import logging
@@ -1386,10 +1387,18 @@ class ModuleLooper():
                                           f"supported. SUPPORTS_MODULE_TYPES is {SUPPORTS_MODULE_TYPES}")
 
             lm_head_quant_config = {"bits": 8, "group_size": 32, "sym": True, "desc_act": False, "mse": 2.4}
+            # house M3 (review J5): key the hidden default by a regex that
+            # also matches the module's full load-time path (e.g.
+            # `language_model.lm_head` under multimodal wrappers) — a bare
+            # module name serializes into the artifact and never matches on
+            # the vLLM side.
+            lm_head_key = (
+                r"+:^(?!.*(?:embed_tokens|mtp|norm|vision|visual)).*"
+                + re.escape(self.gptq_model.lm_head) + r"$")
             if self.gptq_model.quantize_config.dynamic is None:
-                self.gptq_model.quantize_config.dynamic = {self.gptq_model.lm_head: lm_head_quant_config}
+                self.gptq_model.quantize_config.dynamic = {lm_head_key: lm_head_quant_config}
             elif self.gptq_model.quantize_config.dynamic_get(self.gptq_model.lm_head, default=None) is None:
-                self.gptq_model.quantize_config.dynamic[self.gptq_model.lm_head] = lm_head_quant_config
+                self.gptq_model.quantize_config.dynamic[lm_head_key] = lm_head_quant_config
 
         forward_pass_use_cache = self.gptq_model.model.config.use_cache if hasattr(self.gptq_model.model.config, "use_cache") else False
         self.gptq_model.model.config.use_cache = False
@@ -1536,7 +1545,10 @@ class ModuleLooper():
 
                 processor_name = reverse_p.name()
                 total_log[processor_name] = reverse_p.log
-                if processor_name in ["gptq", "gptq v2", "awq"]:
+                # house M12 (review J8/K12): gate on the processor TYPE —
+                # the name list silently dropped foem/gptaq/qronos logs, so
+                # the quality arms shipped no per-module record at all.
+                if isinstance(reverse_p, GPTQProcessor) or processor_name in ["gptq", "gptq v2", "awq"]:
                     self.gptq_model.quant_log = reverse_p.log
 
                 for module_log in reverse_p.log:

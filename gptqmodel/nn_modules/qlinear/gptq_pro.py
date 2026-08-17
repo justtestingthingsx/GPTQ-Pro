@@ -35,7 +35,11 @@ class GptqProQuantLinear(PackableQuantLinear):
         FORMAT.GPTQ: _GPTQ_PRO_AUTO_PRIORITY,
         FORMAT.GPTQ_V2: _GPTQ_PRO_AUTO_PRIORITY,
     }
-    SUPPORTS_BITS = [4]
+    # house M1 (review C1): packing is bit-generic; only the fork's forward
+    # kernel is 4-bit-only, and we do not serve on this fork's runtime. The
+    # [4]-only pin rejected any per-module dynamic override (e.g. an int8
+    # lm_head) at pack-module selection, killing every mixed-precision run.
+    SUPPORTS_BITS = [2, 3, 4, 8]
     SUPPORTS_GROUP_SIZE = [-1, 16, 32, 64, 128, 256, 512, 1024]
     SUPPORTS_DESC_ACT = [False]
     SUPPORTS_SYM = [True]

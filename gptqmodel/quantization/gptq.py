@@ -1116,7 +1116,11 @@ class GPTQ:
                             self.quantizer = groups[idx // self.qcfg.group_size]
 
                     # Vectorized quantization for the entire block (major optimization)
-                    if len(scale) > 0 and len(zero) > 0:
+                    # house M13 (review C4): scale[-1] is ONE group's grid;
+                    # applying it to a whole block is only valid when the
+                    # block cannot span a group boundary.
+                    effective_gs = self.qcfg.group_size if self.qcfg.group_size != -1 else self.columns
+                    if len(scale) > 0 and len(zero) > 0 and effective_gs >= (i2 - i1):
                         # Use latest scale and zero for the entire block
                         latest_scale = scale[-1]
                         latest_zero = zero[-1]

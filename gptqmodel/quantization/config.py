@@ -1839,7 +1839,9 @@ class BaseQuantizeConfig(metaclass=QuantizeConfigMeta):
         if fallback is None:
             fallback = failsafe
 
-        if failsafe is None:
+        # house M11 (review J7): guard on the RESOLVED fallback — checking
+        # `failsafe` discarded a caller-passed `fallback=` kwarg.
+        if fallback is None:
             fallback = Fallback(
                 strategy=FallbackStrategy.RTN,
                 threshold="0.5%",

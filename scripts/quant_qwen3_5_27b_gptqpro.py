@@ -96,7 +96,7 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--calib-device",
-        default="cuda:0",
+        default="cpu",  # house M8 (review K29): cuda:0 pinned ~10.7 GB all run
         help="device used for calibration tensors",
     )
     parser.add_argument(
@@ -349,7 +349,7 @@ def _build_quantize_config(args: argparse.Namespace):
             desc_act=False,
         ),
         "quality": lambda: QuantizeConfig.quality_4bit(group_size=args.group_size),
-        "max_quality": lambda: QuantizeConfig.max_quality_4bit(group_size=args.group_size),
+        "max_quality": lambda: QuantizeConfig.max_quality_4bit(group_size=args.group_size, gptaq_device="cpu"),  # house M5 (review J3)
     }
     quantize_config = factories[args.preset]()
     # The local GPTQ-Pro runtime is intentionally 4-bit, symmetric, and
@@ -357,7 +357,16 @@ def _build_quantize_config(args: argparse.Namespace):
     # contract even if preset defaults change later.
     quantize_config.desc_act = False
     quantize_config.sym = True
+    # house M6 (review J1/J2/K27): GAR runs only inside GPTQ.quantize, which
+    # only the plain-GPTQ arm executes — FOEM/GPTAQ/Qronos silently skip it
+    # while the metadata claims it ran. Decision: ALL arms run GAR-free so
+    # the four artifacts are comparable and the metadata is truthful.
+    quantize_config.act_group_aware = False
     quantize_config.offload_to_disk = args.offload_disk
+    # house M7 (review K28): explicit per-arm offload scratch (the default
+    # CWD path accumulates one >=5 GB tree per arm plus the vision tower).
+    if args.offload_disk and args.out:
+        quantize_config.offload_to_disk_path = str(args.out) + "-offload"
     quantize_config.calibration_data_device = args.calib_device
 
     if getattr(args, "lm_head_int8", False):
@@ -376,7 +385,14 @@ def _build_quantize_config(args: argparse.Namespace):
         }
         if quantize_config.dynamic is None:
             quantize_config.dynamic = {}
-        quantize_config.dynamic.setdefault("lm_head", entry)
+        # house M3 (review J5): the dynamic key must match the module's
+        # FULL path at load time — vLLM sees `language_model.lm_head`, so a
+        # bare "lm_head" key never matches there and the serve-side dequant
+        # would use the 4-bit global. armD's proven regex matches both the
+        # quant-time and vLLM-side names while excluding lookalikes.
+        quantize_config.dynamic.setdefault(
+            r"+:^(?!.*(?:embed_tokens|mtp|norm|vision|visual)).*lm_head$",
+            entry)
 
     if getattr(args, "foem_alpha", None) is not None:
         from gptqmodel.quantization.config import FOEMConfig
@@ -384,7 +400,8 @@ def _build_quantize_config(args: argparse.Namespace):
         if getattr(args, "qronos", False):
             raise SystemExit("--foem-alpha and --qronos are mutually exclusive")
         quantize_config.foem = FOEMConfig(
-            alpha=float(args.foem_alpha), beta=float(args.foem_beta))
+            alpha=float(args.foem_alpha), beta=float(args.foem_beta),
+            device="cpu")  # house M5 (review J3): 33 GiB/layer staging
 
     if getattr(args, "qronos", False):
         # Fail fast on PYTHONPATH mistakes (review m6/F2): the dispatch's own
@@ -405,7 +422,7 @@ def _build_quantize_config(args: argparse.Namespace):
         # arm runner rewrites it to qronos provenance post-save (see
         # run_qronos_postsave.py); an artifact whose meta says gptaq but
         # whose run log says `Qronos ENGAGED` has NOT been post-processed.
-        quantize_config.gptaq = GPTAQConfig(alpha=0.0)
+        quantize_config.gptaq = GPTAQConfig(alpha=0.0, device="cpu")  # house M5 (review J3)
         quantize_config.qronos = True
         quantize_config.qronos_percdamp = float(getattr(args, "qronos_percdamp", 1e-5))
         # Qronos.quantize() fully replaces GPTQ.quantize(): solver-internal

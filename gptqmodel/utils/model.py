@@ -722,6 +722,17 @@ def convert_gptq_v2_to_v1_format_module(
 
     log.info.once("Format: Converting GPTQ v2 to v1")
 
+    # house M2 (review C2, ship with M1): the zeros offset MUST use the
+    # MODULE's own bit width, not the global config's — a per-module dynamic
+    # override (int8 lm_head in a 4-bit run) otherwise gets the 4-bit offset
+    # (stored zeros 111 instead of 127) and vLLM silently dequantizes with a
+    # wrong zero point. module.bits is authoritative post-pack.
+    module_bits = getattr(module, "bits", None)
+    if module_bits is not None and module_bits != quantize_config.bits:
+        import copy as _copy
+        quantize_config = _copy.copy(quantize_config)
+        quantize_config.bits = module_bits
+
     if quantize_config.bits == 2:
         module.qzeros.data -= 0b01010101010101010101010101010101
     elif quantize_config.bits == 3:
