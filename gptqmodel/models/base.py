@@ -1485,6 +1485,13 @@ class BaseQModel(nn.Module):
 
     def post_quantize(self, module: nn.Module) -> nn.Module:
         #return self.offload_to_disk(module=module)
+        # house: a module that re-shelled to meta after its last forward
+        # (turtle release, no accelerate offload hooks) has no live tensors
+        # to move; move_to raises on it. First hit: pre-lm_head norm in the
+        # 2-layer rental smoke, 2026-08-17.
+        import accelerate
+        if _module_has_meta_tensors(module) and not accelerate.utils.has_offloaded_params(module):
+            return module
         return move_to(module, device=CPU)
 
     def _replace_live_submodule(
