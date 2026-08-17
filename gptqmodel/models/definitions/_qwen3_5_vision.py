@@ -63,6 +63,16 @@ class Qwen3_5VisionMixin:
         for name, _ in core_model.named_children():
             if name != "language_model":
                 base_modules.append(f"{prefix}.{name}" if prefix else name)
+        # house: also return language_model's own non-layer children
+        # (embed_tokens, norm, rotary_emb). The input-capture stage
+        # materializes exactly this list to CPU before the calibration
+        # forward; without these entries the embedding lazily materializes
+        # on the quantize device while batches stay on the calib device,
+        # crashing the first forward (cpu index vs cuda:0 embedding).
+        lm_prefix = f"{prefix}.language_model" if prefix else "language_model"
+        for name, _ in core_model.language_model.named_children():
+            if name != "layers":
+                base_modules.append(f"{lm_prefix}.{name}")
         return base_modules
 
     def _materialize_core_module(self, parent, attr_name: str):
