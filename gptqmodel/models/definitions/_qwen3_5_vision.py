@@ -75,18 +75,32 @@ class Qwen3_5VisionMixin:
                 base_modules.append(f"{lm_prefix}.{name}")
         return base_modules
 
-    def _materialize_core_module(self, parent, attr_name: str):
+    def _materialize_core_module(self, parent, attr_name: str, device=None):
         module = getattr(parent, attr_name)
+        target = self.quantize_config.device if device is None else device
         if "_turtle_lock" not in self.__dict__ and "shell_module_materialize" not in self.__dict__:
-            setattr(parent, attr_name, move_to(module, device=self.quantize_config.device))
+            setattr(parent, attr_name, move_to(module, device=target))
             return
-        setattr(parent, attr_name, self.shell_module_materialize(module, self.quantize_config.device))
+        setattr(parent, attr_name, self.shell_module_materialize(module, target))
+
+    def _capture_data_device(self):
+        # house: the input-capture stage stages calibration batches on
+        # calibration_data_device (cpu by driver default). The pre-layer
+        # forward (embed_tokens) must live on the SAME device as the batch;
+        # materializing it on the quantize device crashes text-only capture
+        # (cpu input_ids vs cuda:0 embedding, first hit on the 2026-08-17
+        # rental smoke — this path had never executed on a GPU before).
+        calib_dev = self.quantize_config.calibration_data_device
+        if calib_dev is None or (isinstance(calib_dev, str) and calib_dev == "balanced"):
+            return CPU
+        return calib_dev
 
     def pre_quantize_generate_hook_start(self):
         _, core_model, vision_attr = self._resolve_multimodal_layout(self.model)
-        self._materialize_core_module(core_model.language_model, "embed_tokens")
-        self._materialize_core_module(core_model.language_model, "rotary_emb")
-        self._materialize_core_module(core_model, vision_attr)
+        target = self._capture_data_device()
+        self._materialize_core_module(core_model.language_model, "embed_tokens", device=target)
+        self._materialize_core_module(core_model.language_model, "rotary_emb", device=target)
+        self._materialize_core_module(core_model, vision_attr, device=target)
 
     def pre_quantize_generate_hook_end(self):
         _, core_model, vision_attr = self._resolve_multimodal_layout(self.model)
