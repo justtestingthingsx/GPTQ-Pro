@@ -35,7 +35,13 @@ def main() -> int:
 
     root = Path(args.artifact)
     cfg_path = root / "config.json"
-    report_path = root / "qwen3_5_27b_preflight.json"
+    # The 3.8 wrapper emits qwen3_8_27b_preflight.json; the 3.5/3.6 base
+    # driver emits qwen3_5_27b_preflight.json. Accept whichever exists.
+    report_path = next(
+        (p for p in (root / "qwen3_8_27b_preflight.json",
+                     root / "qwen3_5_27b_preflight.json") if p.is_file()),
+        root / "qwen3_8_27b_preflight.json",
+    )
 
     if not cfg_path.is_file():
         print(f"ERROR: {cfg_path} not found", file=sys.stderr)
