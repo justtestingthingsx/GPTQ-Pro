@@ -126,6 +126,8 @@ class NativeProcessor(LoopProcessor):
 
         del self.native_inp_caches
 
+        super().finalize(model=model, **kwargs)
+
     def verify_calibration_dataset(self, processor_index: int) -> bool:
         """Ensures a calibration dataset was provided before running capture."""
 

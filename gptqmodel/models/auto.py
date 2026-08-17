@@ -302,24 +302,32 @@ def _activation_quantization_mode(quantization_config: dict) -> Optional[str]:
     surface, but it does not currently implement activation-quantized runtime
     semantics. This helper keeps the rejection logic in one place for both
     ModelOpt-style grouped configs and flatter HF quantization payloads.
+
+    Weight-only checkpoints (W8A16/FP8, W4A16/FP4) still declare their dense
+    activations explicitly, so a present `input_activations`/`kv_cache_scheme`
+    block is only disqualifying when it asks for fewer than 16 bits. This
+    matches `BaseQModel._modelopt_activation_quantization_mode`.
     """
+
+    def _is_narrow_activation_spec(spec: object) -> bool:
+        if not isinstance(spec, dict):
+            return False
+        num_bits = spec.get("num_bits")
+        return isinstance(num_bits, (int, float)) and int(num_bits) < 16
 
     config_groups = quantization_config.get("config_groups")
     if isinstance(config_groups, dict):
         for group_cfg in config_groups.values():
             if not isinstance(group_cfg, dict):
                 continue
-            input_activations = group_cfg.get("input_activations")
-            if isinstance(input_activations, dict) and input_activations:
+            if _is_narrow_activation_spec(group_cfg.get("input_activations")):
                 return "input_activations"
 
-    kv_cache_scheme = quantization_config.get("kv_cache_scheme")
-    if isinstance(kv_cache_scheme, dict) and kv_cache_scheme:
+    if _is_narrow_activation_spec(quantization_config.get("kv_cache_scheme")):
         return "kv_cache_scheme"
 
     for key in ("input_activations", "activation_quantization", "activations"):
-        value = quantization_config.get(key)
-        if isinstance(value, dict) and value:
+        if _is_narrow_activation_spec(quantization_config.get(key)):
             return key
     return None
 

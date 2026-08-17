@@ -597,18 +597,9 @@ def ModelLoader(cls):
         with suspend_hf_weight_init():
             cls.before_model_load(cls, model_local_path=model_local_path, load_quantized_model=True)
 
-            if config.architectures:
-                model_class = getattr(transformers, config.architectures[0], None)
-                if model_class is not None:
-                    # backward-compatible fallback for "_supports_flash_attn" field
-                    if hasattr(model_class, "_supports_flash_attn_2"):
-                        supports_flash_attn = getattr(model_class, "_supports_flash_attn_2")
-                    elif hasattr(model_class, "_supports_flash_attn"):
-                        supports_flash_attn = getattr(model_class, "_supports_flash_attn")
-                else:
-                    supports_flash_attn = None
-            else:
-                supports_flash_attn = None
+            # resolves the architecture and handles the "_supports_flash_attn" fallback,
+            # returning False when the class exposes neither flag
+            supports_flash_attn = _supports_flash_attn_2(config)
 
             args = {}
             if supports_flash_attn and device in [DEVICE.CUDA, DEVICE.ROCM]:
@@ -672,7 +663,7 @@ def ModelLoader(cls):
                 model,
                 device,
                 layers: List[torch.nn.Module],
-                ignore_modules: List[torch.nn.Module],
+                ignore_modules: List[str],
                 num_gpus: Optional[int] = None,
         ) -> Dict[str, str]:
             """
@@ -739,14 +730,16 @@ def ModelLoader(cls):
                     layer_name2devid[lname] = gpu
 
             # Ignored modules - skip input embeddings to avoid overriding GPU 0 assignment
-            # Iterate over modules that should be ignored during default layer-wise mapping
-            for mod in ignore_modules:
+            # Iterate over modules that should be ignored during default layer-wise mapping.
+            # `ignore_modules` holds dotted paths (`cls.lm_head` + `cls.get_base_modules()`).
+            in_emb_name = mod2name.get(in_emb) if in_emb is not None else None
+            known_module_names = set(mod2name.values())
+            for name in ignore_modules:
                 # Preserve GPU-0 placement for the input embedding module if it exists
-                if in_emb is not None and mod is in_emb:
+                if in_emb_name is not None and name == in_emb_name:
                     continue  # Skip input embedding to preserve GPU 0 assignment
-                # Retrieve the module’s fully-qualified name
-                name = mod2name.get(mod)
-                if name is None:
+                # Drop paths that this architecture does not carry (e.g. a missing lm_head)
+                if name not in known_module_names:
                     continue
                 # Walk up the module hierarchy to find the closest ancestor that already has a device assignment
                 owner = name
@@ -762,7 +755,7 @@ def ModelLoader(cls):
                 if dev_id is None:
                     dev_id = device_ids[-1]
                 # Assign the current module to the determined device
-                assign(mod, dev_id)
+                device_map[name] = device_strs[dev_id]
             # -------------------------------------------------------------
             # 4. Handle lm_head / output projection explicitly
             # -------------------------------------------------------------

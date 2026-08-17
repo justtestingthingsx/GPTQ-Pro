@@ -50,7 +50,12 @@ from ..quantization.config import (
     resolve_quant_format,
 )
 from ..quantization.dtype import (
+    available_float8_dtypes,
+    dequantize_f4_e2m1,
+    dequantize_fp8,
     device_supports_dtype,
+    device_supports_native_fp4,
+    is_fp4_packed_dtype,
 )
 from ..quantization.rotation.rotation import fuse_layer_norms, rotate_model
 from ..utils.attn_mask import normalize_seq_mask
@@ -1814,6 +1819,9 @@ class BaseQModel(nn.Module):
                 weight=weight,
                 scale_inv=scale_inv,
             )
+            raise NotImplementedError(
+                "TorchFP8Linear passthrough wrapper is not present in this "
+                "fork; the auto_module_decoder FP8 forward path is unfinished.")
             forward_module = TorchFP8Linear(
                 bits=8,
                 group_size=-1,
@@ -1877,6 +1885,9 @@ class BaseQModel(nn.Module):
                 target_submodule=target_submodule,
                 scale=scale,
             )
+            raise NotImplementedError(
+                "TorchFP4Linear passthrough wrapper is not present in this "
+                "fork; the auto_module_decoder FP4 forward path is unfinished.")
             forward_module = TorchFP4Linear(
                 in_features=target_submodule.in_features,
                 out_features=target_submodule.out_features,
@@ -2015,9 +2026,6 @@ class BaseQModel(nn.Module):
         last_module = None  # most recent norm obj (from a '!...' block)
         last_module_name = None
         last_module_root = None  # self_attn.* has root == self_attn, mlp.* has root == mlp
-
-        if self.model.config is not None and self.dynamic_expert_index is not None:
-            self.get_num_experts(self.model.config)
 
         def strip_non_quantize_flags(module_name):
             for flag in NON_QUANTIZE_FLAGS:

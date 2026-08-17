@@ -102,6 +102,12 @@ _FLOAT4_PACKED_DTYPE_NAMES = tuple(
 # dtypes even when the current safetensors header schema cannot serialize them.
 _DTYPE_NUM_BYTES = dict.fromkeys((*[getattr(torch, name) for name in _FLOAT8_DTYPE_NAMES], *[getattr(torch, name) for name in _FLOAT4_PACKED_DTYPE_NAMES]), 1)
 
+# torch dtypes with no numpy counterpart: `Tensor.numpy()` raises TypeError on
+# these, so the shard writer must reinterpret them as uint8 before serializing.
+_NUMPY_UNSUPPORTED_BYTE_DTYPES = frozenset(
+    getattr(torch, name) for name in (*_FLOAT8_DTYPE_NAMES, *_FLOAT4_PACKED_DTYPE_NAMES)
+)
+
 
 _DTYPE_STR_MAP = {
     "float32": torch.float32,
@@ -587,6 +593,20 @@ def convert_gptq_v1_to_v2_format_module(module: BaseQuantLinear, bits: int, pack
     assert isinstance(module, BaseQuantLinear)
 
     log.info.once("Format: Converting GPTQ v1 to v2")
+
+    # Mirror of the M2 fix in convert_gptq_v2_to_v1_format_module: the zeros
+    # offset MUST use the MODULE's own bit width / pack dtype, not the global
+    # config's. A per-module dynamic override (int8 lm_head in a 4-bit run)
+    # would otherwise get the 4-bit offset table applied to its 8-bit qzeros,
+    # silently corrupting the zero point. The callers below (including the
+    # public hf_convert_gptq_v1_to_v2_format) only ever pass global values,
+    # so the correction has to happen here.
+    module_bits = getattr(module, "bits", None)
+    if module_bits is not None:
+        bits = module_bits
+    module_pack_dtype = getattr(module, "pack_dtype", None)
+    if module_pack_dtype is not None:
+        pack_dtype = module_pack_dtype
 
     # v1 checkpoint format used to do `qzeros = qzeros -= 1` before serialization, thus the
     # additions here do not overflow.
@@ -1419,7 +1439,7 @@ def _resolve_offload_entry(
         end = start + (_torch_dtype_num_bytes(resolved_dtype) * math.prod(shape or (1,)))
         return OffloadTensorRef(
             path=os.path.abspath(path),
-            dtype=resolved_dtype,
+            torch_dtype=resolved_dtype,
             shape=shape,
             format="dat",
             weight_name=None,
@@ -1599,6 +1619,10 @@ def _write_tensor_bytes(out, tensor: torch.Tensor, dtype: torch.dtype) -> None:
     if dtype is torch.bfloat16:
         view = tensor.view(torch.int16)
         out.write(view.numpy().tobytes())
+    elif dtype in _NUMPY_UNSUPPORTED_BYTE_DTYPES:
+        # numpy has no float8 bridge; reinterpret the 1-byte payload as uint8 so
+        # the body matches the F8_* dtype already advertised in the header.
+        out.write(tensor.view(torch.uint8).numpy().tobytes())
     else:
         out.write(tensor.numpy().tobytes())
 

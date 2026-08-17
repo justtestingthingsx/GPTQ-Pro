@@ -50,6 +50,10 @@ class Qwen3_5_MoeBaseQModel(BaseQModel):
 
     require_monkeypatch = False
 
+    # Same shared Qwen3.5-family SDPA path as the dense siblings, which errors when
+    # calibration batches contain multiple padded samples: stay single-sample.
+    support_batch_quantize = False
+
     # config.num_experts contains the real routed expert count.
     dynamic_expert_index = "num_experts"
 

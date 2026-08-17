@@ -30,6 +30,7 @@ import torch
 from .. import DEBUG_ON, DEVICE_THREAD_POOL
 from ..looper.gptq_processor import GPTQProcessor
 from ..looper.named_module import NamedModule
+from ..models.base import CAPTURE_ONLY_FLAG
 from ..utils.device import get_device, get_device_new
 from ..utils.looper_helpers import normalize_device_like
 from ..utils.logger import live_renderables_suppressed, log_time_block, setup_logger
@@ -54,7 +55,7 @@ def _find_last_quantized_layer_index(
         return None
 
     layer_module_names = {
-        name.split("#", 1)[0]
+        name.split(CAPTURE_ONLY_FLAG, 1)[0]
         for module_group in layer_modules
         for name in module_group
         if name
@@ -83,16 +84,6 @@ def _should_drain_finalize_futures_synchronously(
     """Decide whether one layer must finish finalization before the next begins."""
     if looper.gptq_model.quantize_config.wait_for_submodule_finalizers:
         return True
-    return False
-
-
-def _should_empty_cache_after_sync_finalize(
-    looper: "ModuleLooper",
-    *,
-    finalize_tasks,
-) -> bool:
-    if not getattr(looper.gptq_model.quantize_config, "offload_to_disk", False):
-        return False
     return False
 
 
@@ -869,11 +860,6 @@ def run_layer_stage(
                         )
                         if looper.gptq_model.quantize_config.gc_mode == GcMode.ON_STAGE_END:
                             torch_empty_cache(device=cur_layer_device, sync=True)
-                        elif _should_empty_cache_after_sync_finalize(
-                            looper,
-                            finalize_tasks=finalize_tasks,
-                        ):
-                            torch_empty_cache(device=cur_layer_device, gc=False, sync=True)
                     else:
                         # Asynchronous (current/default behavior): drain in background thread
                         # This allows next layer to start while current layer finalizes
@@ -891,6 +877,9 @@ def run_layer_stage(
                         looper.register_dangling_thread(finalizer_thread)
                         finalizer_thread.start()
                 else:
+                    # No finalize work queued: _drain_finalize_futures never runs,
+                    # so close the progress bar here instead of leaking the handle.
+                    finalize_pb.close()
                     looper._emit_layer_complete(
                         layer_idx=layer_index,
                         submodule_finalized=True,
