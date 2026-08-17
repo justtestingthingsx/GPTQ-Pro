@@ -50,7 +50,12 @@ from ..quantization.config import (
     resolve_quant_format,
 )
 from ..quantization.dtype import (
+    available_float8_dtypes,
+    dequantize_f4_e2m1,
+    dequantize_fp8,
     device_supports_dtype,
+    device_supports_native_fp4,
+    is_fp4_packed_dtype,
 )
 from ..quantization.rotation.rotation import fuse_layer_norms, rotate_model
 from ..utils.attn_mask import normalize_seq_mask
@@ -1814,6 +1819,14 @@ class BaseQModel(nn.Module):
                 weight=weight,
                 scale_inv=scale_inv,
             )
+            # house (ultrareview run-3 follow-up): TorchFP8Linear is not
+            # defined anywhere in this fork — the passthrough materialization
+            # path is unfinished upstream. Fail with a statement, not a
+            # NameError. Not on the quant-arm path (AutoModuleDecoderConfig
+            # is never configured there).
+            raise NotImplementedError(
+                "TorchFP8Linear passthrough wrapper is not present in this "
+                "fork; the auto_module_decoder FP8 forward path is unfinished.")
             forward_module = TorchFP8Linear(
                 bits=8,
                 group_size=-1,
@@ -1877,6 +1890,11 @@ class BaseQModel(nn.Module):
                 target_submodule=target_submodule,
                 scale=scale,
             )
+            # house: see the FP8 twin above — TorchFP4Linear does not exist
+            # in this fork either.
+            raise NotImplementedError(
+                "TorchFP4Linear passthrough wrapper is not present in this "
+                "fork; the auto_module_decoder FP4 forward path is unfinished.")
             forward_module = TorchFP4Linear(
                 in_features=target_submodule.in_features,
                 out_features=target_submodule.out_features,
