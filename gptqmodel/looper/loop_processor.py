@@ -218,7 +218,10 @@ class LoopProcessor:
             return 0
         total = 0
         for row in calibration_dataset:
-            if not isinstance(row, dict):
+            # house M10 (review J6): calibration rows arrive as Mapping
+            # subclasses too; rejecting them zeroed total tokens and turned
+            # the "0.5%" fallback threshold into an absolute 0.005.
+            if not isinstance(row, dict) and not hasattr(row, "keys"):
                 continue
             if "attention_mask" in row:
                 mask = row["attention_mask"]

@@ -972,7 +972,7 @@ class PackableQuantLinear(GPTQQuantLinear):
             except Exception as exc:
                 if force_ext:
                     raise
-                log.debug("pack_block: native extension unavailable, falling back to Python path (%s)", exc)
+                log.warn("pack_block: native extension unavailable, falling back to Python path (%s)", exc)
 
         # NOTE: pack_factor is only meaningful for {2,4,8}. There is NO integer pack_factor for 3-bit.
         if bits in (2, 4, 8):
@@ -1057,6 +1057,9 @@ class PackableQuantLinear(GPTQQuantLinear):
 
             # int_block = round((W + scale_zeros[g_idx]^T) / scales[g_idx]^T)
             int_block = t.round((Wblk + sz_blk_T) / s_blk_T).to(t.int32)  # [out, blk]
+            # house M4 (review C3): clamp to the code range before packing —
+            # unclamped overflow wraps and corrupts the neighbouring field.
+            int_block = int_block.clamp_(0, self.maxq)
             int_block = int_block.T.contiguous()  # [blk, out]
 
             groups32 = blk // word_bits
@@ -1254,6 +1257,8 @@ class PackableQuantLinear(GPTQQuantLinear):
             s_blk_T = scales_dev.index_select(0, gsel).T
 
             int_block = t.round((Wblk + sz_blk_T) / s_blk_T).to(t.int32)
+            # house M4 (review C3): clamp before packing.
+            int_block = int_block.clamp_(0, self.maxq)
             int_block = int_block.T.contiguous()
 
             groups32 = blk // word_bits
@@ -1328,6 +1333,8 @@ class PackableQuantLinear(GPTQQuantLinear):
                 self.register_buffer("bias", linear.bias.to(dtype=t.float16))
 
             int_weight = t.round((W + scale_zeros[self.g_idx].T) / scales[self.g_idx].T).to(t.int32)
+            # house M4 (review C3): clamp before packing.
+            int_weight = int_weight.clamp_(0, self.maxq)
             int_weight = int_weight.T.contiguous()
             int_weight = int_weight.numpy().astype(self.pack_np_math_dtype)
 

@@ -196,7 +196,15 @@ class FOEM(GPTQ):
         Losses = torch.zeros_like(W)
         Q = torch.zeros_like(W)
 
+        # house M9 (review J4): scrub non-finite Hessian entries like base
+        # GPTQ does — their absence made the subclasses MORE likely to abort
+        # on a non-PD Hessian than base is.
+        H.nan_to_num_(nan=0.0, posinf=0.0, neginf=0.0)
         Hinv, damp = self.hessian_inverse(H)
+        if Hinv is None:
+            raise ValueError(
+                f"FOEM: Hessian inversion failed for `{self.name}` after the "
+                "damping ladder; module cannot be solved (review J4).")
         if self.qcfg.foem is None:
             raise ValueError("FOEM requires `foem` configuration.")
         if self.gptaq:

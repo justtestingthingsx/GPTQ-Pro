@@ -172,8 +172,12 @@ class GPTQProcessor(LoopProcessor):
             tmp = FOEM(module=module, qcfg=qcfg_clone)
         else:
             tmp = GPTQ(module=module, qcfg=qcfg_clone)
-            tmp.fallback = qcfg_clone.fallback
-            tmp.expected_nsamples = getattr(self, "total_calibration_tokens", None)
+        # house M10 (review J6): fallback + expected_nsamples belong to EVERY
+        # solver branch — leaving them on the plain-GPTQ branch alone gives
+        # FOEM/GPTAQ/Qronos a percentage threshold that resolves against a
+        # missing total and degenerates to an absolute 0.005.
+        tmp.fallback = qcfg_clone.fallback
+        tmp.expected_nsamples = getattr(self, "total_calibration_tokens", None)
 
         tmp.quantizer.configure(
             perchannel=True,
