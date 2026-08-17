@@ -150,7 +150,23 @@ class GPTQProcessor(LoopProcessor):
         # store last used qcfg_dynamic
         self.qcfg_dynamic = qcfg_clone
 
-        if qcfg_clone.gptaq is not None:
+        # --- Qronos (house solver, arXiv:2505.11695) ---------------------
+        # Marker attrs are set by the arm driver on the ORIGINAL qcfg. The
+        # clone is a deepcopy so the attrs DO survive it (verified); reading
+        # self.qcfg and re-stamping the clone is defence-in-depth against a
+        # future clone implementation change, not a current necessity. The
+        # driver also sets qcfg.gptaq = GPTAQConfig(alpha=0.0) purely so the
+        # stock plumbing inserts NativeProcessor (models/base.py); the GPTAQ
+        # solver itself is bypassed by this branch, and the post-save step
+        # rewrites the gptaq metadata to qronos provenance.
+        if getattr(self.qcfg, "qronos", False):
+            from qronos_gptqmodel import Qronos
+            qcfg_clone.qronos = True
+            qcfg_clone.qronos_percdamp = getattr(self.qcfg, "qronos_percdamp", 1e-5)
+            tmp = Qronos(module=module, qcfg=qcfg_clone)
+            tmp.expected_nsamples = getattr(self, "total_calibration_tokens", None)
+            log.info(f"Quantization: module `{module.full_name}` -> solver `Qronos` ENGAGED")
+        elif qcfg_clone.gptaq is not None:
             tmp = GPTAQ(module=module, qcfg=qcfg_clone)
         elif qcfg_clone.foem is not None:
             tmp = FOEM(module=module, qcfg=qcfg_clone)
@@ -491,6 +507,8 @@ class GPTQProcessor(LoopProcessor):
 
         # TODO fix me..this hacks inherited base class logic, why not override name in gptaq?
         qcfg = self.qcfg_dynamic if self.qcfg_dynamic is not None else self.qcfg
+        if getattr(self.qcfg, "qronos", False) or getattr(qcfg, "qronos", False):
+            return "qronos"
         if qcfg.gptaq is not None:
             return "gptaq"
         if qcfg.foem is not None:

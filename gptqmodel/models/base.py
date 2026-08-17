@@ -1454,9 +1454,15 @@ class BaseQModel(nn.Module):
             norm, _ = get_module_by_name_prefix(self.model, [self.pre_lm_head_norm_module])
             norm = self.pre_quantize(norm)
 
+            # House fix (armD round-2 lineage): the cached inputs may live on
+            # a different device than the norm module (cpu-staged calibration
+            # vs cuda-resident norm) -> RuntimeError. Route each element
+            # through the norm's device and back to its own.
+            ndev = next(norm.parameters()).device
             for element in inputs:
                 for i in range(len(element)):
-                    element[i] = norm(element[i])
+                    src = element[i].device
+                    element[i] = norm(element[i].to(ndev)).to(src)
 
             self.post_quantize(norm)
         return inputs

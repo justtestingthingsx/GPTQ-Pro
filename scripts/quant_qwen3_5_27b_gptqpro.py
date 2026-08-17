@@ -110,6 +110,46 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="enable only for reviewed third-party derivatives; official checkpoints do not need it",
     )
+    parser.add_argument(
+        "--foem-alpha",
+        type=float,
+        default=None,
+        help="enable FOEM with this alpha (0 = FOEM-alone, 0.25 = FOEM+GPTAQ "
+             "combo; armD lineage). Requires --foem-beta.",
+    )
+    parser.add_argument(
+        "--foem-beta",
+        type=float,
+        default=0.2,
+        help="FOEM beta (paper-recommended band 0.1-0.25)",
+    )
+    parser.add_argument(
+        "--qronos",
+        action="store_true",
+        help="use the house Qronos solver (arXiv:2505.11695) instead of the "
+             "preset's GPTQ-family solver; requires qronos_gptqmodel.py on "
+             "PYTHONPATH and the gptq-pro-qronos.patch applied",
+    )
+    parser.add_argument(
+        "--qronos-percdamp",
+        type=float,
+        default=1e-5,
+        help="Qronos damping basis: damp = percdamp * lambda_max(H)",
+    )
+    parser.add_argument(
+        "--lm-head-int8",
+        action="store_true",
+        help="quantize lm_head to int8 (armD parity); explicit dynamic entry "
+             "so the looper's hidden default never fires",
+    )
+    parser.add_argument(
+        "--lm-head-mse",
+        type=float,
+        default=0.0,
+        help="MSE scale-search for the lm_head override. 0 (default) avoids "
+             "the measured ~19 GiB VRAM transient at 248320x5120 (armD "
+             "FIX-16); armD itself shipped with mse=0.0 recorded",
+    )
     args = parser.parse_args()
 
     if not args.preflight_only and not args.out:
@@ -319,6 +359,61 @@ def _build_quantize_config(args: argparse.Namespace):
     quantize_config.sym = True
     quantize_config.offload_to_disk = args.offload_disk
     quantize_config.calibration_data_device = args.calib_device
+
+    if getattr(args, "lm_head_int8", False):
+        # Explicit lm_head override (armD parity). Providing our own dynamic
+        # entry means module_looper's hidden default
+        # ({bits:8, group_size:32, mse:2.4}) never fires — mse is OUR call
+        # (default 0.0: avoids the ~19 GiB find_params transient at
+        # 248320x5120; armD shipped with mse=0.0 recorded in its meta).
+        quantize_config.lm_head = True
+        entry = {
+            "bits": 8,
+            "group_size": 32,
+            "sym": True,
+            "desc_act": False,
+            "mse": float(getattr(args, "lm_head_mse", 0.0)),
+        }
+        if quantize_config.dynamic is None:
+            quantize_config.dynamic = {}
+        quantize_config.dynamic.setdefault("lm_head", entry)
+
+    if getattr(args, "foem_alpha", None) is not None:
+        from gptqmodel.quantization.config import FOEMConfig
+
+        if getattr(args, "qronos", False):
+            raise SystemExit("--foem-alpha and --qronos are mutually exclusive")
+        quantize_config.foem = FOEMConfig(
+            alpha=float(args.foem_alpha), beta=float(args.foem_beta))
+
+    if getattr(args, "qronos", False):
+        # Fail fast on PYTHONPATH mistakes (review m6/F2): the dispatch's own
+        # import happens at the first module of layer 0 — after model load
+        # and calibration prep have burned rental minutes.
+        try:
+            import qronos_gptqmodel  # noqa: F401
+        except ImportError as e:
+            raise SystemExit(
+                f"--qronos needs qronos_gptqmodel.py on PYTHONPATH: {e}")
+        from gptqmodel.quantization.config import GPTAQConfig
+
+        # Markers read by the patched gptq_processor dispatch. gptaq is set
+        # ONLY so the stock plumbing inserts NativeProcessor (models/base.py)
+        # and wires the dataset fallback (module_looper); alpha=0.0 marks it
+        # as inert and the Qronos branch bypasses the GPTAQ solver entirely.
+        # NOTE: the artifact's meta will still record a `gptaq` entry — the
+        # arm runner rewrites it to qronos provenance post-save (see
+        # run_qronos_postsave.py); an artifact whose meta says gptaq but
+        # whose run log says `Qronos ENGAGED` has NOT been post-processed.
+        quantize_config.gptaq = GPTAQConfig(alpha=0.0)
+        quantize_config.qronos = True
+        quantize_config.qronos_percdamp = float(getattr(args, "qronos_percdamp", 1e-5))
+        # Qronos.quantize() fully replaces GPTQ.quantize(): solver-internal
+        # levers of the presets that live inside GPTQ.quantize (GAR
+        # act_group_aware group reordering, fallback smoothing) do not apply
+        # on this path. Disable GAR explicitly so config and reality agree.
+        quantize_config.act_group_aware = False
+
     return quantize_config
 
 
@@ -412,6 +507,10 @@ def main() -> None:
         isinstance(module, BaseQuantLinear)
         for module in model.model.modules()
     )
+    if getattr(args, "lm_head_int8", False):
+        # lm_head packs as one extra quant module on top of the decoder's
+        # contract count.
+        expected_packed_modules = expected_packed_modules + 1
     if packed_modules != expected_packed_modules:
         raise RuntimeError(
             "packed-module validation failed: "
@@ -435,6 +534,25 @@ def main() -> None:
         "quantized_layers": quantized_layers,
         "total_layers": total_layers,
         "packed_modules": packed_modules,
+        "solver": (
+            "qronos" if getattr(args, "qronos", False)
+            else "foem" if getattr(args, "foem_alpha", None) is not None
+            else "preset"
+        ),
+        "foem_alpha": getattr(args, "foem_alpha", None),
+        "foem_beta": (
+            float(getattr(args, "foem_beta", 0.2))
+            if getattr(args, "foem_alpha", None) is not None else None
+        ),
+        "qronos_percdamp": (
+            float(getattr(args, "qronos_percdamp", 1e-5))
+            if getattr(args, "qronos", False) else None
+        ),
+        "lm_head_int8": bool(getattr(args, "lm_head_int8", False)),
+        "lm_head_mse": (
+            float(getattr(args, "lm_head_mse", 0.0))
+            if getattr(args, "lm_head_int8", False) else None
+        ),
     }
     (output_path / "qwen3_5_27b_preflight.json").write_text(
         json.dumps(report, indent=2, sort_keys=True) + "\n",
