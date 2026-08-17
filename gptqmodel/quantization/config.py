@@ -33,6 +33,11 @@ _DECODER_TARGET_DTYPE_MAP = {
     "bf16": torch.bfloat16,
 }
 
+# `decode` materializes the dense decoded module, `native` keeps the source floatx tensors.
+_DECODER_PASSTHROUGH_POLICIES = {"decode", "native"}
+_DECODER_DEFAULT_SAVE_POLICY = "decode"
+_DECODER_DEFAULT_FORWARD_POLICY = "native"
+
 BITS_FIELD_CODE = "bits"
 GROUP_SIZE_FIELD_CODE = "group_size"
 FORMAT_FIELD_CODE = "format"
@@ -623,6 +628,12 @@ class AutoModuleDecoderConfig(BasePreProcessorConfig):
     code: ClassVar[str] = PreProcessorCode.AUTO_MODULE_DECODER.value
     source_dtype: str = "auto"
     target_dtype: Union[str, torch.dtype] = torch.bfloat16
+    # `decode` rewrites passthrough floatx modules to `target_dtype` before the
+    # checkpoint is written; `native` leaves the source tensors untouched.
+    passthrough_save_policy: str = _DECODER_DEFAULT_SAVE_POLICY
+    # `native` keeps FP8/FP4 forward kernels when the device supports them and
+    # decodes only as a fallback; `decode` always runs the dense decoded module.
+    passthrough_forward_policy: str = _DECODER_DEFAULT_FORWARD_POLICY
 
     def __post_init__(self):
         """Normalize the decoder payload into canonical string and dtype values."""
@@ -645,12 +656,33 @@ class AutoModuleDecoderConfig(BasePreProcessorConfig):
             )
         self.target_dtype = normalized_dtype
 
+        self.passthrough_save_policy = self._normalize_passthrough_policy(
+            self.passthrough_save_policy, field="passthrough_save_policy"
+        )
+        self.passthrough_forward_policy = self._normalize_passthrough_policy(
+            self.passthrough_forward_policy, field="passthrough_forward_policy"
+        )
+
+    @staticmethod
+    def _normalize_passthrough_policy(value: Any, *, field: str) -> str:
+        """Validate a passthrough policy into its canonical lowercase form."""
+
+        policy = str(value).strip().lower()
+        if policy not in _DECODER_PASSTHROUGH_POLICIES:
+            raise ValueError(
+                f"AutoModuleDecoderConfig: `{field}` must be one of "
+                f"{sorted(_DECODER_PASSTHROUGH_POLICIES)}, got `{value}`."
+            )
+        return policy
+
     def to_dict(self) -> Dict[str, Any]:
         """Serialize the decoder config with a stable dtype string payload."""
 
         payload = super().to_dict()
         payload["source_dtype"] = self.source_dtype
         payload["target_dtype"] = str(self.target_dtype).split(".")[-1]
+        payload["passthrough_save_policy"] = self.passthrough_save_policy
+        payload["passthrough_forward_policy"] = self.passthrough_forward_policy
         return payload
 
 
@@ -1054,6 +1086,12 @@ def _normalize_preprocessor_config(payload: Any) -> BasePreProcessorConfig:
             return AutoModuleDecoderConfig(
                 source_dtype=payload.get("source_dtype", "auto"),
                 target_dtype=payload.get("target_dtype", torch.bfloat16),
+                passthrough_save_policy=payload.get(
+                    "passthrough_save_policy", _DECODER_DEFAULT_SAVE_POLICY
+                ),
+                passthrough_forward_policy=payload.get(
+                    "passthrough_forward_policy", _DECODER_DEFAULT_FORWARD_POLICY
+                ),
             )
         if code == PreProcessorCode.TENSOR_PARALLEL_PADDER.value:
             return TensorParallelPadderConfig()

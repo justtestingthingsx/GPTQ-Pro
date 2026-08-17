@@ -1819,11 +1819,6 @@ class BaseQModel(nn.Module):
                 weight=weight,
                 scale_inv=scale_inv,
             )
-            # house (ultrareview run-3 follow-up): TorchFP8Linear is not
-            # defined anywhere in this fork — the passthrough materialization
-            # path is unfinished upstream. Fail with a statement, not a
-            # NameError. Not on the quant-arm path (AutoModuleDecoderConfig
-            # is never configured there).
             raise NotImplementedError(
                 "TorchFP8Linear passthrough wrapper is not present in this "
                 "fork; the auto_module_decoder FP8 forward path is unfinished.")
@@ -1890,8 +1885,6 @@ class BaseQModel(nn.Module):
                 target_submodule=target_submodule,
                 scale=scale,
             )
-            # house: see the FP8 twin above — TorchFP4Linear does not exist
-            # in this fork either.
             raise NotImplementedError(
                 "TorchFP4Linear passthrough wrapper is not present in this "
                 "fork; the auto_module_decoder FP4 forward path is unfinished.")
@@ -2033,9 +2026,6 @@ class BaseQModel(nn.Module):
         last_module = None  # most recent norm obj (from a '!...' block)
         last_module_name = None
         last_module_root = None  # self_attn.* has root == self_attn, mlp.* has root == mlp
-
-        if self.model.config is not None and self.dynamic_expert_index is not None:
-            self.get_num_experts(self.model.config)
 
         def strip_non_quantize_flags(module_name):
             for flag in NON_QUANTIZE_FLAGS:

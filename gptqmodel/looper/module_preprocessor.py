@@ -66,6 +66,13 @@ class ModulePreProcessor(LoopProcessor):
                     "code": preprocessor.code,
                     "source_dtype": preprocessor.source_dtype,
                     "target_dtype": preprocessor.target_dtype,
+                    # house (ultrareview run-3 follow-up 2): without these the
+                    # consumers fall back to their defaults no matter what the
+                    # user configured on AutoModuleDecoderConfig.
+                    "passthrough_save_policy": getattr(
+                        preprocessor, "passthrough_save_policy", "decode"),
+                    "passthrough_forward_policy": getattr(
+                        preprocessor, "passthrough_forward_policy", "native"),
                 }
                 pipeline.append(auto_module_decoder_plan)
                 continue
