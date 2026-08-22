@@ -66,13 +66,18 @@ def main() -> int:
             "port": "target-quant/qronos qronos_gptqmodel.py",
         }
         meta["act_group_aware"] = False
-        if "hessian" in meta:
-            meta["hessian"] = {"note": "not honoured by qronos solver "
-                                       "(process_batch overridden)"}
-        if "fallback" in meta and isinstance(meta["fallback"], dict):
-            meta["fallback"]["note"] = (
-                "live only as the zero/under-threshold entry fallback "
-                "under qronos")
+        # Annotations go under our own free-form `qronos` block. They must NOT
+        # be written into `hessian` / `fallback`: those are schema-typed
+        # (HessianConfig, FallbackConfig) and gptqmodel re-parses them on load,
+        # so an explanatory "note" key makes the artifact unloadable by our own
+        # toolchain — `HessianConfig.__init__() got an unexpected keyword
+        # argument 'note'`. Found 2026-08-22 when the drafter lane tried to load
+        # S4 for aux capture; the arm had been unloadable since it was built.
+        meta["qronos"]["notes"] = {
+            "hessian": "not honoured by qronos solver (process_batch overridden)",
+            "fallback": ("live only as the zero/under-threshold entry fallback "
+                         "under qronos"),
+        }
         return meta
 
     cfg = json.loads(cfg_path.read_text())
